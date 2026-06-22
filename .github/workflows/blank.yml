@@ -22,28 +22,25 @@ jobs:
           
           for f in **/*.zip; do
             if [ -f "$f" ]; then
-              echo "➡ Menemukan file: $f. Mengekstrak..."
+              echo "Mengekstrak $f..."
               DIR=$(dirname "$f")
               unzip -q -o "$f" -d "$DIR"
               rm "$f"
-              echo "✅ Selesai mengekstrak: $f"
             fi
           done
 
-      - name: Bypass GitHub Security for Workflows
+      - name: Cegah error GitHub Security (Buang isi workflow dari ZIP)
         run: |
-          # Cari apakah di dalam ZIP tadi ada folder action
-          # Jika ada, rename sementra agar push tidak diblokir GitHub
-          if [ -d ".github/workflows" ]; then
-            echo "Menemukan file YML dari ZIP, me-rename sementara untuk bypass keamanan GitHub..."
-            find .github/workflows -type f -name "*.yml" -exec mv {} {}.bak \;
-          fi
+          # Mengembalikan folder .github/workflows ke kondisi awal
+          # (mencegah file build.yml dari ZIP ikut ter-push dan bikin error)
+          git checkout -- .github/workflows/ || true
+          git clean -fd .github/workflows/ || true
 
       - name: Commit and Push
         run: |
           git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
           git add .
-          git commit -m "chore: auto-extract uploaded ZIP folder" || echo "No changes to commit"
+          git commit -m "chore: auto-extract ZIP and ignore workflow overrides" || echo "No changes to commit"
           git push
