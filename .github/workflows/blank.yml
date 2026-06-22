@@ -1,46 +1,71 @@
-name: Auto Extract ZIP
+name: Build Release APK
 
 on:
-  push:
-    paths:
-      - '**/*.zip'
   workflow_dispatch:
+    inputs:
+      sign_apk:
+        description: 'Sign APK'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
-  extract-and-commit:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract ZIP files
-        run: |
-          shopt -s nullglob globstar
-          
-          for f in **/*.zip; do
-            if [ -f "$f" ]; then
-              echo "Mengekstrak $f..."
-              DIR=$(dirname "$f")
-              unzip -q -o "$f" -d "$DIR"
-              rm "$f"
-            fi
-          done
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
-      - name: Cegah error GitHub Security (Buang isi workflow dari ZIP)
+      - name: Install Gradle
         run: |
-          # Mengembalikan folder .github/workflows ke kondisi awal
-          # (mencegah file build.yml dari ZIP ikut ter-push dan bikin error)
-          git checkout -- .github/workflows/ || true
-          git clean -fd .github/workflows/ || true
+          wget -q https://services.gradle.org/distributions/gradle-8.4-bin.zip -O /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /opt/gradle
+          /opt/gradle/gradle-8.4/bin/gradle wrapper --gradle-version 8.4 --distribution-type bin
 
-      - name: Commit and Push
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Inject build timestamp for app expiry
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
-          git add .
-          git commit -m "chore: auto-extract ZIP and ignore workflow overrides" || echo "No changes to commit"
-          git push
+          BUILD_MS=$(date +%s%3N)
+          sed -i "s/private static final long BUILD_TIME_MS  = [0-9]*L;/private static final long BUILD_TIME_MS  = ${BUILD_MS}L;/" \
+            app/src/main/java/com/gitdeploy/app/MainActivity.java
+          echo "Build timestamp injected: $BUILD_MS"
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Sign APK
+        if: ${{ inputs.sign_apk == 'true' && vars.SIGNING_ALIAS != '' }}
+        run: |
+          APK=$(find app/build/outputs/apk/release -name "*.apk" ! -name "signed*" | head -1)
+          echo "Signing: $APK"
+          $ANDROID_HOME/build-tools/33.0.1/apksigner sign \
+            --ks "${{ vars.SIGNING_KEY_PATH }}" \
+            --ks-key-alias "${{ vars.SIGNING_ALIAS }}" \
+            --ks-pass "pass:${{ vars.SIGNING_STORE_PASS }}" \
+            --key-pass "pass:${{ vars.SIGNING_KEY_PASS }}" \
+            --out "app/build/outputs/apk/release/signed-release.apk" \
+            "$APK"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 30
